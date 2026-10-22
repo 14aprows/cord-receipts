@@ -9,7 +9,9 @@ from src.configs.config import (
     EPOCHS,
     LEARNING_RATE,
     IMAGE_SIZE,
-    SEED
+    SEED,
+    PATIENCE,
+    MIN_DELTA
 )
 
 from src.data.dataset import CordDataset
@@ -20,6 +22,7 @@ from src.models.encoder import ImageEncoder
 from src.models.decoder import TextDecoder
 from src.models.model import CordModel
 from src.training.trainer import train_one_epoch
+from scripts.evaluate import evaluate
 
 def main(
     encoder, 
@@ -28,13 +31,12 @@ def main(
     tokenizer,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    smoke_test=False,
 ):
     torch.manual_seed(SEED)
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
-    print(f"Device: {device}", flush=True)
+    print(f"Device: {device}")
 
     collate_fn = create_collate_fn(
         image_processor=image_processor,
@@ -47,11 +49,24 @@ def main(
         raise FileNotFoundError(f"No training files found in {DATA_DIR}")
 
     train_dataset = CordDataset(parquet_files=train_files)
-    print(f"Train samples: {len(train_dataset)}", flush=True)
+    print(f"Train records: {len(train_dataset)}")
     train_loader = create_dataloader(
         dataset=train_dataset,
         batch_size=batch_size,
-        shuffle=not smoke_test,
+        shuffle=True,
+        collate_fn=collate_fn
+    )
+
+    val_files = sorted(DATA_DIR.glob("validation-*.parquet"))
+    if not val_files:
+        raise FileNotFoundError("Validation files were not found")
+
+    val_dataset = CordDataset(parquet_files=val_files)
+    print(f"Validation records: {len(val_dataset)}")
+    val_loader = create_dataloader(
+        dataset=val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
         collate_fn=collate_fn
     )
 
@@ -62,39 +77,61 @@ def main(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    if smoke_test:
-        print("Testing one batch...", flush=True)
-        batch = next(iter(train_loader))
-        loss = train_one_epoch(model, [batch], optimizer, device)
-        if not torch.isfinite(torch.tensor(loss)):
-            raise ValueError("The loss is not finite.")
-        print(f"Test passed | Loss: {loss:.4f}", flush=True)
-        return model
-
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
+    best_val_loss = float("inf")
+    stopping_best = float("inf")
+    bad_epochs = 0
     for epoch in range(epochs):
-        print(f"Starting epoch {epoch + 1}/{epochs}", flush=True)
+        print(f"Starting epoch {epoch + 1}/{epochs}")
         train_loss = train_one_epoch(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
             device=device
         )
-        print(f"Epoch {epoch+1}/{epochs} | Train loss: {train_loss:.4f}", flush=True)
-        torch.save(
-            {
-                "epoch": epoch+1,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "loss": train_loss,
-                "tokenizer_type": "utf8_bytes_v1",
-                "hidden_size": decoder.token_embedding.embedding_dim,
-                "max_length": decoder.max_length,
-                "image_size": image_processor.image_size,
-            },
-            CHECKPOINT_DIR / "last.pt"
+
+        results = evaluate(model, val_loader, device)
+        val_loss = results["loss"]
+        token_accuracy = results["token_accuracy"]
+
+        if not torch.isfinite(torch.tensor(val_loss)):
+            raise ValueError("Validation loss is not finite.")
+        print(
+            f"Epoch {epoch + 1}/{epochs} "
+            f"| Train loss: {train_loss:.4f} "
+            f"| Val loss: {val_loss:.4f} "
+            f"| Val token accuracy: {token_accuracy:.2%}"
         )
+
+        checkpoint = {
+            "epoch": epoch + 1,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loss": train_loss,
+            "val_loss": val_loss,
+            "tokenizer_type": "utf8_bytes_v1",
+            "hidden_size": decoder.token_embedding.embedding_dim,
+            "max_length": decoder.max_length,
+            "image_size": image_processor.image_size,
+        }
+
+        torch.save(checkpoint, CHECKPOINT_DIR / "last.pt")
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(checkpoint, CHECKPOINT_DIR / "best.pt")
+            print("Best model saved.")
+
+        if val_loss < stopping_best - MIN_DELTA:
+            stopping_best = val_loss
+            bad_epochs = 0
+        else:
+            bad_epochs += 1
+
+        if bad_epochs >= PATIENCE:
+            print("Early stopping.")
+            break
 
     return model
 
@@ -102,7 +139,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the receipt model.")
     parser.add_argument("--epochs", type=int, default=EPOCHS)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
-    parser.add_argument("--smoke-test", action="store_true")
     args = parser.parse_args()
 
     if args.epochs < 1 or args.batch_size < 1:
@@ -127,5 +163,4 @@ if __name__ == "__main__":
         tokenizer=tokenizer,
         epochs=args.epochs,
         batch_size=args.batch_size,
-        smoke_test=args.smoke_test,
     )
