@@ -8,9 +8,12 @@ DATA_DIR = DATAROOT_DIR / "cordrcv2/data"
 print(DATA_DIR)
 OUTPUT_DIR = ROOT_DIR / "outputs"
 
-CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
-PREDICTION_DIR = ROOT_DIR / "predictions"
-METRICS_DIR = ROOT_DIR / "metrics"
+if Path("/kaggle/working").is_dir():
+    OUTPUT_DIR = Path("/kaggle/working/cord-receipts")
+
+CHECKPOINT_DIR = OUTPUT_DIR / "checkpoints"
+PREDICTION_DIR = OUTPUT_DIR / "predictions"
+METRICS_DIR = OUTPUT_DIR / "metrics"
 
 SEED = 42
 
