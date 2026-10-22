@@ -1,8 +1,10 @@
 from pathlib import Path  
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+DATAROOT_DIR = Path(__file__).resolve().parents[3]
 
-DATA_DIR = ROOT_DIR / "cordrcv2/data"
+DATA_DIR = DATAROOT_DIR / "cordv2/data"
+print(DATA_DIR)
 OUTPUT_DIR = ROOT_DIR / "outputs"
 
 CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
