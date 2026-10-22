@@ -50,10 +50,10 @@ class TextDecoder(nn.Module):
         )
 
     def forward(
-            self, 
-            input_ids, 
-            encoder_hidden_states,
-            labels=None
+        self, 
+        input_ids, 
+        encoder_hidden_states,
+        labels=None
     ):
         if input_ids is None:
             raise ValueError("input ids is missing")
