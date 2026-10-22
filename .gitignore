@@ -1,0 +1,14 @@
+﻿__pycache__/
+*.pyc
+.cache/
+data/
+checkpoints/
+outputs/
+predictions/
+metrics/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.ipynb_checkpoints/
