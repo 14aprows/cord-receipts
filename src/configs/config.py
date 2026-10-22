@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
-DATA_DIR = ROOT_DIR / "data"
+DATA_DIR = ROOT_DIR / "cordrcv2/data"
 OUTPUT_DIR = ROOT_DIR / "outputs"
 
 CHECKPOINT_DIR = ROOT_DIR / "checkpoints"
