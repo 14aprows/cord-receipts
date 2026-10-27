@@ -9,14 +9,13 @@ from src.data.loader import create_dataloader
 from src.data.collate import create_collate_fn
 from src.data.preprocessing import ByteTokenizer, ImageProcessor
 from src.evaluation.metrics import calculate_text_metrics
-from src.models.encoder import ImageEncoder
-from src.models.decoder import TextDecoder
-from src.models.model import CordModel
+from src.models.custom.encoder import ImageEncoder
+from src.models.custom.decoder import TextDecoder
+from src.models.custom.model import CordModel
 from scripts.inference import predict
 
 @torch.no_grad()
 def evaluate(model, dataloader, device):
-    # Hitung loss dan token accuracy untuk seluruh dataloader.
     model.eval()
     total_loss = 0.0
     total_batches = 0
@@ -37,7 +36,6 @@ def evaluate(model, dataloader, device):
         total_loss += outputs["loss"].item()
         total_batches += 1
 
-        # Padding -100 tidak dihitung dalam akurasi.
         predictions = outputs["logits"].argmax(dim=-1)
         valid_tokens = labels != -100
         correct_tokens += ((predictions == labels) & valid_tokens).sum().item()
