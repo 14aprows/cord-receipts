@@ -2,7 +2,7 @@ import torch
 from PIL import Image
 
 from src.configs.config import CHECKPOINT_DIR
-from src.models.model import CordModel
+from src.models.custom.model import CordModel
 
 @torch.no_grad()
 def predict(
