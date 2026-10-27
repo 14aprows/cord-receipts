@@ -1,10 +1,9 @@
 import argparse
-
+import time
 import torch
 
 from src.configs.config import (
     DATA_DIR,
-    CHECKPOINT_DIR,
     BATCH_SIZE,
     EPOCHS,
     LEARNING_RATE,
@@ -18,30 +17,37 @@ from src.data.dataset import CordDataset
 from src.data.loader import create_dataloader
 from src.data.collate import create_collate_fn
 from src.data.preprocessing import ByteTokenizer, ImageProcessor
-from src.models.encoder import ImageEncoder
-from src.models.decoder import TextDecoder
-from src.models.model import CordModel
+from src.models.custom.encoder import ImageEncoder
+from src.models.custom.decoder import TextDecoder
+from src.models.custom.model import CordModel
+from src.models.donut.model import DonutModel
 from src.training.trainer import train_one_epoch
 from scripts.evaluate import evaluate
+from src.configs.config import OUTPUT_DIR
+from src.utils.csv_logger import save_csv
+from src.utils.visualization import plot_training
 
 def main(
-    encoder, 
-    decoder, 
+    model,
+    model_name,
     image_processor, 
+    start_token_id,
     tokenizer,
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
 ):
-    torch.manual_seed(SEED)
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
+    model = model.to(device)
+
+    print(f"Model: {model_name}") 
     print(f"Device: {device}")
 
     collate_fn = create_collate_fn(
         image_processor=image_processor,
         tokenizer=tokenizer,
-        decoder_start_token_id=decoder.start_token_id
+        decoder_start_token_id=start_token_id
     )
 
     train_files = sorted(DATA_DIR.glob("train-*.parquet"))
@@ -70,19 +76,23 @@ def main(
         collate_fn=collate_fn
     )
 
-    model = CordModel(
-        encoder=encoder,
-        decoder=decoder
-    ).to(device)
-
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 
-    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = OUTPUT_DIR / model_name
+    checkpoint_dir = output_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    csv_path = output_dir / "training_history.csv"
+    figure_path = output_dir / "figures" / "training.png"
+    
+    history = []
     best_val_loss = float("inf")
     stopping_best = float("inf")
     bad_epochs = 0
+
     for epoch in range(epochs):
+        started_at = time.perf_counter()
+
         print(f"Starting epoch {epoch + 1}/{epochs}")
         train_loss = train_one_epoch(
             model=model,
@@ -94,9 +104,21 @@ def main(
         results = evaluate(model, val_loader, device)
         val_loss = results["loss"]
         token_accuracy = results["token_accuracy"]
-
+        
         if not torch.isfinite(torch.tensor(val_loss)):
             raise ValueError("Validation loss is not finite.")
+
+        history.append({
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_token_accuracy": token_accuracy,
+            "learning_rate": optimizer.param_groups[0]["lr"],
+            "epoch_seconds": time.perf_counter() - started_at
+        })
+        save_csv(history, csv_path)
+        plot_training(csv_path, figure_path)
+
         print(
             f"Epoch {epoch + 1}/{epochs} "
             f"| Train loss: {train_loss:.4f} "
@@ -105,22 +127,19 @@ def main(
         )
 
         checkpoint = {
+            "model_name": model_name,
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "loss": train_loss,
-            "val_loss": val_loss,
-            "tokenizer_type": "utf8_bytes_v1",
-            "hidden_size": decoder.token_embedding.embedding_dim,
-            "max_length": decoder.max_length,
-            "image_size": image_processor.image_size,
+            "val_loss": val_loss
         }
 
-        torch.save(checkpoint, CHECKPOINT_DIR / "last.pt")
+        torch.save(checkpoint, checkpoint_dir / "last.pt")
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(checkpoint, CHECKPOINT_DIR / "best.pt")
+            torch.save(checkpoint, checkpoint_dir / "best.pt")
             print("Best model saved.")
 
         if val_loss < stopping_best - MIN_DELTA:
@@ -133,34 +152,58 @@ def main(
             print("Early stopping.")
             break
 
-    return model
+    print(f"CSV saved to: {csv_path}")
+    print(f"Figure saved to: {figure_path}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train the receipt model.")
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--model",
+        choices=["custom", "donut"],
+        required=True
+    )
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+
     args = parser.parse_args()
 
-    if args.epochs < 1 or args.batch_size < 1:
-        parser.error("Epochs and batch size must be at least 1.")
-
     torch.manual_seed(SEED)
-    tokenizer = ByteTokenizer()
-    image_processor = ImageProcessor(image_size=IMAGE_SIZE)
-    encoder = ImageEncoder(hidden_size=256)
-    decoder = TextDecoder(
-        vocab_size=len(tokenizer),
-        pad_token_id=tokenizer.pad_token_id,
-        start_token_id=tokenizer.bos_token_id,
-        hidden_size=256,
-        max_length=2048,
-    )
+
+    if args.model == "custom":
+        tokenizer = ByteTokenizer()
+        image_processor = ImageProcessor(
+            image_size=IMAGE_SIZE
+        )
+
+        encoder = ImageEncoder(hidden_size=256)
+
+        decoder = TextDecoder(
+            vocab_size=len(tokenizer),
+            pad_token_id=tokenizer.pad_token_id,
+            start_token_id=tokenizer.bos_token_id,
+            hidden_size=256,
+            max_length=2048
+        )
+
+        model = CordModel(
+            encoder=encoder,
+            decoder=decoder
+        )
+
+        start_token_id = decoder.start_token_id
+    else:
+        model = DonutModel()
+        tokenizer = model.processor.tokenizer
+        image_processor = model.processor.image_processor
+        start_token_id = model.network.config.decoder_start_token_id
+
+        model.processor.save_pretrained(OUTPUT_DIR / "donut" / "processor")
 
     main(
-        encoder=encoder,
-        decoder=decoder,
-        image_processor=image_processor,
+        model=model,
         tokenizer=tokenizer,
+        image_processor=image_processor,
+        start_token_id=start_token_id,
+        model_name=args.model,
         epochs=args.epochs,
-        batch_size=args.batch_size,
     )
