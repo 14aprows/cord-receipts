@@ -15,7 +15,7 @@ from src.models.custom.model import CordModel
 from scripts.inference import predict
 
 @torch.no_grad()
-def evaluate(model, dataloader, device):
+def evaluate(model, dataloader, device, use_amp=False):
     model.eval()
     total_loss = 0.0
     total_batches = 0
@@ -27,11 +27,16 @@ def evaluate(model, dataloader, device):
         input_ids = batch["input_ids"].to(device)
         labels = batch["labels"].to(device)
 
-        outputs = model(
-            pixel_values=images,
-            input_ids=input_ids,
-            labels=labels,
-        )
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.float16,
+            enabled=use_amp and device.type == "cuda"
+        ):
+            outputs = model(
+                pixel_values=images,
+                input_ids=input_ids,
+                labels=labels
+            )
 
         total_loss += outputs["loss"].item()
         total_batches += 1
@@ -40,6 +45,9 @@ def evaluate(model, dataloader, device):
         valid_tokens = labels != -100
         correct_tokens += ((predictions == labels) & valid_tokens).sum().item()
         total_tokens += valid_tokens.sum().item()
+        
+        del outputs, images, input_ids, labels
+        del predictions, valid_tokens
 
     if total_batches == 0 or total_tokens == 0:
         raise ValueError("Evaluation data is empty.")
