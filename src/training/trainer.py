@@ -4,7 +4,8 @@ def train_one_epoch(
     model,
     dataloader,
     optimizer,
-    device
+    device,
+    scaler
 ):
     model.train()
     total_loss = 0.0
@@ -12,23 +13,32 @@ def train_one_epoch(
     for batch in dataloader:
         pixel_values = batch["image"].to(device)
         labels = batch["labels"].to(device)
+        input_ids = batch["input_ids"].to(device)
 
-        input_ids = batch.get("input_ids")
-        if input_ids is not None:
-            input_ids = input_ids.to(device)
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.float16,
+            enabled=scaler.is_enabled()
+        ):
+            outputs = model(
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                labels=labels
+            )
 
-        optimizer.zero_grad()
+            loss = outputs["loss"]
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=1.0
+            )
+            scaler.step(optimizer)
+            scaler.update()
 
-        outputs = model(
-            pixel_values=pixel_values,
-            input_ids=input_ids,
-            labels=labels
-        )
+            total_loss += loss.item()
+            del outputs, loss, pixel_values, input_ids, labels
 
-        loss = outputs["loss"]
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
+        optimizer.zero_grad(set_to_none=True)
 
     return total_loss / max(len(dataloader), 1)
