@@ -77,6 +77,7 @@ def main(
     )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda")
 
     output_dir = OUTPUT_DIR / model_name
     checkpoint_dir = output_dir / "checkpoints"
@@ -98,10 +99,16 @@ def main(
             model=model,
             dataloader=train_loader,
             optimizer=optimizer,
-            device=device
+            device=device,
+            scaler=scaler
         )
 
-        results = evaluate(model, val_loader, device)
+        results = evaluate(
+            model=model, 
+            dataloader=val_loader, 
+            device=device,
+            use_amp=scaler.is_enabled()
+        )
         val_loss = results["loss"]
         token_accuracy = results["token_accuracy"]
         
@@ -131,6 +138,7 @@ def main(
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
             "loss": train_loss,
             "val_loss": val_loss
         }
