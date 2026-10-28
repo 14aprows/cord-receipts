@@ -164,8 +164,11 @@ if __name__ == "__main__":
         required=True
     )
     parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
 
     args = parser.parse_args()
+    if args.batch_size < 1:
+        parser.error("Batch size must be at least 1")
 
     torch.manual_seed(SEED)
 
@@ -206,4 +209,5 @@ if __name__ == "__main__":
         start_token_id=start_token_id,
         model_name=args.model,
         epochs=args.epochs,
+        batch_size=args.batch_size
     )
