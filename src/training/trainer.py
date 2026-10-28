@@ -10,7 +10,12 @@ def train_one_epoch(
     model.train()
     total_loss = 0.0
 
+    if len(dataloader) == 0:
+        raise ValueError("Training data is empty.")
+
     for batch in dataloader:
+        optimizer.zero_grad(set_to_none=True)
+
         pixel_values = batch["image"].to(device)
         labels = batch["labels"].to(device)
         input_ids = batch["input_ids"].to(device)
@@ -27,18 +32,22 @@ def train_one_epoch(
             )
 
             loss = outputs["loss"]
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(),
-                max_norm=1.0
-            )
-            scaler.step(optimizer)
-            scaler.update()
 
-            total_loss += loss.item()
-            del outputs, loss, pixel_values, input_ids, labels
+        if not torch.isfinite(loss):
+            raise ValueError("Training loss is not finite.")
 
-        optimizer.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=1.0
+        )
+        scaler.step(optimizer)
+        scaler.update()
 
-    return total_loss / max(len(dataloader), 1)
+        total_loss += loss.item()
+        del outputs, loss, pixel_values, input_ids, labels
+
+    optimizer.zero_grad(set_to_none=True)
+
+    return total_loss / len(dataloader)
